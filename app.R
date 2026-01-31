@@ -18,8 +18,8 @@ normalize_freqs <- function(p) {
   p / total
 }
 
-validate_params <- function(p, s_M, s_m, u_m, u_f, u_z, z_reduction, max_generations, tol) {
-  if (any(!is.finite(c(s_M, s_m, u_m, u_f, u_z, z_reduction, max_generations, tol)))) {
+validate_params <- function(p, s_M, s_m, u_m, u_f, u_z, r_recomb, z_reduction, max_generations, tol) {
+  if (any(!is.finite(c(s_M, s_m, u_m, u_f, u_z, r_recomb, z_reduction, max_generations, tol)))) {
     stop("Parameters must be numeric.")
   }
   if (max_generations < 1) {
@@ -27,8 +27,8 @@ validate_params <- function(p, s_M, s_m, u_m, u_f, u_z, z_reduction, max_generat
   }
   if (s_M < 0 || s_M > 1 || s_m < 0 || s_m > 1 ||
       u_m < 0 || u_m > 1 || u_f < 0 || u_f > 1 || u_z < 0 || u_z > 1 ||
-      z_reduction < 0 || z_reduction > 1) {
-    stop("Parameters s_M, s_m, u_m, u_f, u_z, z_reduction must be in [0, 1].")
+      r_recomb < 0 || r_recomb > 0.5 || z_reduction < 0 || z_reduction > 1) {
+    stop("Parameters s_M, s_m, u_m, u_f, u_z, r_recomb, z_reduction must be in [0, 1] (r_recomb <= 0.5).")
   }
   if (u_f + u_z > 1) {
     stop("u_f + u_z must be <= 1.")
@@ -59,6 +59,26 @@ mutation_step <- function(p, u_m, u_f, u_z) {
   mutated
 }
 
+recombination_step <- function(p, r_recomb) {
+  if (r_recomb <= 0) return(p)
+
+  p_M <- sum(p[sapply(haplotypes, function(h) hap_M_allele(h) == "M")])
+  p_m <- 1 - p_M
+  p_F <- sum(p[sapply(haplotypes, function(h) hap_F_allele(h) == "F")])
+  p_f <- sum(p[sapply(haplotypes, function(h) hap_F_allele(h) == "f")])
+  p_z <- 1 - p_F - p_f
+
+  target <- c(
+    MF = p_M * p_F,
+    Mf = p_M * p_f,
+    Mz = p_M * p_z,
+    mF = p_m * p_F,
+    mf = p_m * p_f,
+    mz = p_m * p_z
+  )
+  (1 - r_recomb) * p + r_recomb * target
+}
+
 simulate_recursion <- function(cfg, progress_cb = NULL) {
   p <- cfg$p
   s_M <- cfg$s_M
@@ -66,6 +86,7 @@ simulate_recursion <- function(cfg, progress_cb = NULL) {
   u_m <- cfg$u_m
   u_f <- cfg$u_f
   u_z <- cfg$u_z
+  r_recomb <- cfg$r_recomb
   z_reduction <- cfg$z_reduction
   max_generations <- cfg$max_generations
   tol <- cfg$tol
@@ -131,6 +152,10 @@ simulate_recursion <- function(cfg, progress_cb = NULL) {
       next_p <- mutation_step(next_p, u_m, u_f, u_z)
     }
 
+    if (r_recomb > 0) {
+      next_p <- recombination_step(next_p, r_recomb)
+    }
+
     next_p <- normalize_freqs(next_p)
     p <- next_p
 
@@ -187,6 +212,9 @@ ui <- fluidPage(
       numericInput("u_f", "u_f (F -> f)", value = 1e-4, min = 0, max = 1, step = 1e-5),
       numericInput("u_z", "u_z (F -> z)", value = 1e-6, min = 0, max = 1, step = 1e-7),
       tags$hr(),
+      h4("Recombination"),
+      numericInput("r_recomb", "r (between M and F)", value = 1e-7, min = 0, max = 0.5, step = 1e-7),
+      tags$hr(),
       h4("Run settings"),
       numericInput("max_generations", "max_generations", value = 20000, min = 1, step = 1),
       numericInput("tol", "tol", value = 1e-8, min = 0, step = 1e-8),
@@ -220,7 +248,8 @@ server <- function(input, output, session) {
 
     result <- tryCatch({
       p <- validate_params(p, input$s_M, input$s_m, input$u_m, input$u_f,
-                           input$u_z, input$z_reduction, input$max_generations, input$tol)
+                           input$u_z, input$r_recomb, input$z_reduction,
+                           input$max_generations, input$tol)
       cfg <- list(
         p = p,
         s_M = input$s_M,
@@ -228,6 +257,7 @@ server <- function(input, output, session) {
         u_m = input$u_m,
         u_f = input$u_f,
         u_z = input$u_z,
+        r_recomb = input$r_recomb,
         z_reduction = input$z_reduction,
         max_generations = input$max_generations,
         tol = input$tol

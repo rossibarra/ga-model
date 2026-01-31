@@ -1,6 +1,6 @@
 # Two-Locus Plant Mating Model (M/F/z)
 
-This app simulates a diploid, hermaphroditic plant population with two tightly linked loci: an M locus (alleles M/m) and an F locus (alleles F/f/z). Tightly linked means **no recombination**, so haplotypes are inherited intact.
+This app simulates a diploid, hermaphroditic plant population with two tightly linked loci: an M locus (alleles M/m) and an F locus (alleles F/f/z). By default the loci are effectively nonrecombining, but you can optionally add a rare recombination rate between them.
 
 ## Mating behavior
 
@@ -30,6 +30,10 @@ After mating and zygote formation, haplotypes mutate with one-way rates:
 - `u_z`: F → z
 
 No reverse mutation is modeled. Mutation is applied to haplotypes (not genotypes) and the haplotypes are renormalized afterward so they sum to 1.
+
+### Recombination
+
+After mutation, a recombination step moves haplotype frequencies toward linkage equilibrium at rate `r` between the M and F loci. Setting `r = 0` recovers the strictly linked case.
 
 ### Stopping rule
 
