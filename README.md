@@ -43,3 +43,13 @@ The plot can optionally show dashed grey curves for how the overall **M** and **
 - `F(t) = F0 * (1 - u_f - u_z)^t`
 
 These are a visual reference and are not used in the simulation itself.
+
+## Run from the command line
+
+From the project directory:
+
+```sh
+R -q -e "shiny::runApp('.')"
+```
+
+This launches the Shiny app in your default browser.
