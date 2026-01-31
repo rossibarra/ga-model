@@ -1,0 +1,15 @@
+haplotypes:
+  MF: 0.2
+  Mf: 0.2
+  Mz: 0.1
+  mF: 0.2
+  mf: 0.2
+  mz: 0.1
+s_M: 0.02
+s_m: 0.4
+u_m: 0.01
+u_f: 0.02
+u_z: 0.01
+z_reduction: 0.5
+max_generations: 200
+# tol: 1e-8
