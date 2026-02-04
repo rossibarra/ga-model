@@ -5,9 +5,9 @@ suppressPackageStartupMessages({
   library(ggplot2)
 })
 
-haplotypes <- c("MF", "Mf", "Mz", "mF", "mf", "mz")
+haplotypes <- c("MF", "Mf", "Mz", "MFp", "MFs", "mF", "mf", "mz", "mFp", "mFs")
 
-hap_F_allele <- function(h) substr(h, 2, 2)
+hap_F_allele <- function(h) substr(h, 2, nchar(h))
 hap_M_allele <- function(h) substr(h, 1, 1)
 
 normalize_freqs <- function(p) {
@@ -18,25 +18,25 @@ normalize_freqs <- function(p) {
   p / total
 }
 
-validate_params <- function(p, s_M, s_m, u_m, u_f, u_z, r_recomb, z_reduction, max_generations, tol) {
-  if (any(!is.finite(c(s_M, s_m, u_m, u_f, u_z, r_recomb, z_reduction, max_generations, tol)))) {
+validate_params <- function(p, s_M, s_m, u_m, u_f, u_z, u_fp, u_fs, r_recomb, z_reduction, max_generations, tol) {
+  if (any(!is.finite(c(s_M, s_m, u_m, u_f, u_z, u_fp, u_fs, r_recomb, z_reduction, max_generations, tol)))) {
     stop("Parameters must be numeric.")
   }
   if (max_generations < 1) {
     stop("max_generations must be >= 1.")
   }
   if (s_M < 0 || s_M > 1 || s_m < 0 || s_m > 1 ||
-      u_m < 0 || u_m > 1 || u_f < 0 || u_f > 1 || u_z < 0 || u_z > 1 ||
+      u_m < 0 || u_m > 1 || u_f < 0 || u_f > 1 || u_z < 0 || u_z > 1 || u_fp < 0 || u_fp > 1 || u_fs < 0 || u_fs > 1 ||
       r_recomb < 0 || r_recomb > 0.5 || z_reduction < 0 || z_reduction > 1) {
-    stop("Parameters s_M, s_m, u_m, u_f, u_z, r_recomb, z_reduction must be in [0, 1] (r_recomb <= 0.5).")
+    stop("Parameters s_M, s_m, u_m, u_f, u_z, u_fp, u_fs, r_recomb, z_reduction must be in [0, 1] (r_recomb <= 0.5).")
   }
-  if (u_f + u_z > 1) {
-    stop("u_f + u_z must be <= 1.")
+  if (u_f + u_fp > 1) {
+    stop("u_f + u_fp must be <= 1.")
   }
   normalize_freqs(p)
 }
 
-mutation_step <- function(p, u_m, u_f, u_z) {
+mutation_step <- function(p, u_m, u_f, u_z, u_fp) {
   mutated <- setNames(rep(0, length(haplotypes)), haplotypes)
   for (h in haplotypes) {
     m_allele <- hap_M_allele(h)
@@ -44,7 +44,9 @@ mutation_step <- function(p, u_m, u_f, u_z) {
 
     m_targets <- if (m_allele == "M") c(M = 1 - u_m, m = u_m) else c(m = 1)
     f_targets <- if (f_allele == "F") {
-      c(F = 1 - u_f - u_z, f = u_f, z = u_z)
+      c(F = 1 - u_f - u_fp, f = u_f, Fp = u_fp)
+    } else if (f_allele == "f") {
+      c(f = 1 - u_z, z = u_z)
     } else {
       setNames(1, f_allele)
     }
@@ -66,15 +68,21 @@ recombination_step <- function(p, r_recomb) {
   p_m <- 1 - p_M
   p_F <- sum(p[sapply(haplotypes, function(h) hap_F_allele(h) == "F")])
   p_f <- sum(p[sapply(haplotypes, function(h) hap_F_allele(h) == "f")])
-  p_z <- 1 - p_F - p_f
+  p_Fp <- sum(p[sapply(haplotypes, function(h) hap_F_allele(h) == "Fp")])
+  p_Fs <- sum(p[sapply(haplotypes, function(h) hap_F_allele(h) == "Fs")])
+  p_z <- 1 - p_F - p_f - p_Fp - p_Fs
 
   target <- c(
     MF = p_M * p_F,
     Mf = p_M * p_f,
     Mz = p_M * p_z,
+    MFp = p_M * p_Fp,
+    MFs = p_M * p_Fs,
     mF = p_m * p_F,
     mf = p_m * p_f,
-    mz = p_m * p_z
+    mz = p_m * p_z,
+    mFp = p_m * p_Fp,
+    mFs = p_m * p_Fs
   )
   (1 - r_recomb) * p + r_recomb * target
 }
@@ -86,6 +94,8 @@ simulate_recursion <- function(cfg, progress_cb = NULL) {
   u_m <- cfg$u_m
   u_f <- cfg$u_f
   u_z <- cfg$u_z
+  u_fp <- cfg$u_fp
+  u_fs <- cfg$u_fs
   r_recomb <- cfg$r_recomb
   z_reduction <- cfg$z_reduction
   max_generations <- cfg$max_generations
@@ -108,12 +118,20 @@ simulate_recursion <- function(cfg, progress_cb = NULL) {
         h_i <- haplotypes[i]
         h_j <- haplotypes[j]
         maternal_f <- c(hap_F_allele(h_i), hap_F_allele(h_j))
-        maternal_has_F <- any(maternal_f == "F")
+        maternal_has_F <- any(maternal_f %in% c("F", "Fp", "Fs"))
+        maternal_has_F_strong <- any(maternal_f %in% c("F", "Fp"))
+        maternal_has_Fs <- any(maternal_f == "Fs")
+        maternal_has_z <- any(maternal_f == "z")
         maternal_is_ff <- all(maternal_f == "f")
-        maternal_is_Fz <- all(sort(maternal_f) == c("F", "z"))
 
         if (maternal_has_F) {
-          s_m_eff <- if (maternal_is_Fz) s_m * (1 - z_reduction) else s_m
+          s_m_eff <- if (maternal_has_F_strong && maternal_has_z) {
+            s_m * (1 - z_reduction)
+          } else if (!maternal_has_F_strong && maternal_has_Fs) {
+            s_m * (1 - z_reduction)
+          } else {
+            s_m
+          }
           weights <- ifelse(sapply(haplotypes, function(h) hap_M_allele(h) == "M"), 1, 1 - s_m_eff)
         } else {
           weights <- rep(1, length(haplotypes))
@@ -141,15 +159,31 @@ simulate_recursion <- function(cfg, progress_cb = NULL) {
           m_prob <- maternal_gametes[[as.character(m_idx)]]
           for (k in seq_along(haplotypes)) {
             contrib <- fg * m_prob * pollen[k] * 0.5
-            next_p[m_idx] <- next_p[m_idx] + contrib
-            next_p[k] <- next_p[k] + contrib
+            h_m <- haplotypes[m_idx]
+            h_p <- haplotypes[k]
+            has_z <- hap_F_allele(h_m) == "z" || hap_F_allele(h_p) == "z"
+
+            if (u_fs > 0 && has_z) {
+              for (h in c(h_m, h_p)) {
+                if (hap_F_allele(h) == "F") {
+                  h_fs <- paste0(hap_M_allele(h), "Fs")
+                  next_p[h] <- next_p[h] + contrib * (1 - u_fs)
+                  next_p[h_fs] <- next_p[h_fs] + contrib * u_fs
+                } else {
+                  next_p[h] <- next_p[h] + contrib
+                }
+              }
+            } else {
+              next_p[h_m] <- next_p[h_m] + contrib
+              next_p[h_p] <- next_p[h_p] + contrib
+            }
           }
         }
       }
     }
 
-    if (u_m > 0 || u_f > 0 || u_z > 0) {
-      next_p <- mutation_step(next_p, u_m, u_f, u_z)
+    if (u_m > 0 || u_f > 0 || u_z > 0 || u_fp > 0) {
+      next_p <- mutation_step(next_p, u_m, u_f, u_z, u_fp)
     }
 
     if (r_recomb > 0) {
@@ -162,7 +196,7 @@ simulate_recursion <- function(cfg, progress_cb = NULL) {
     records[[gen + 1]] <- c(gen = gen, setNames(p, haplotypes))
 
     m_freq <- sum(p[sapply(haplotypes, function(h) hap_M_allele(h) == "M")])
-    f_freq <- sum(p[sapply(haplotypes, function(h) hap_F_allele(h) == "F")])
+    f_freq <- sum(p[sapply(haplotypes, function(h) hap_F_allele(h) %in% c("F", "Fp", "Fs"))])
     if (min(m_freq, 1 - m_freq) <= tol && min(f_freq, 1 - f_freq) <= tol) {
       if (!is.null(progress_cb)) {
         progress_cb(gen, max_generations)
@@ -189,7 +223,7 @@ make_long_df <- function(df) {
 }
 
 ui <- fluidPage(
-  titlePanel("Two-Locus Haplotype Recursion (M/F/z)") ,
+  titlePanel("Two-Locus Haplotype Recursion (M/F/Fp/z)") ,
   sidebarLayout(
     sidebarPanel(
       actionButton("run", "Run simulation"),
@@ -198,9 +232,13 @@ ui <- fluidPage(
       numericInput("p_MF", "MF", value = 1, min = 0, step = 0.01),
       numericInput("p_Mf", "Mf", value = 0, min = 0, step = 0.01),
       numericInput("p_Mz", "Mz", value = 0, min = 0, step = 0.01),
+      numericInput("p_MFp", "MFp", value = 0, min = 0, step = 0.01),
+      numericInput("p_MFs", "MFs", value = 0, min = 0, step = 0.01),
       numericInput("p_mF", "mF", value = 0, min = 0, step = 0.01),
       numericInput("p_mf", "mf", value = 0, min = 0, step = 0.01),
       numericInput("p_mz", "mz", value = 0, min = 0, step = 0.01),
+      numericInput("p_mFp", "mFp", value = 0, min = 0, step = 0.01),
+      numericInput("p_mFs", "mFs", value = 0, min = 0, step = 0.01),
       tags$hr(),
       h4("Selection"),
       numericInput("s_M", "s_M (M pollen on ff)", value = 0.1, min = 0, max = 1, step = 0.01),
@@ -210,7 +248,9 @@ ui <- fluidPage(
       h4("Mutation"),
       numericInput("u_m", "u_m (M -> m)", value = 1e-4, min = 0, max = 1, step = 1e-5),
       numericInput("u_f", "u_f (F -> f)", value = 1e-4, min = 0, max = 1, step = 1e-5),
-      numericInput("u_z", "u_z (F -> z)", value = 1e-6, min = 0, max = 1, step = 1e-7),
+      numericInput("u_z", "u_z (f -> z)", value = 1e-6, min = 0, max = 1, step = 1e-7),
+      numericInput("u_fp", "u_fp (F -> Fp)", value = 1e-7, min = 0, max = 1, step = 1e-7),
+      numericInput("u_fs", "u_fs (F -> Fs in z genomes)", value = 1e-6, min = 0, max = 1, step = 1e-7),
       tags$hr(),
       h4("Recombination"),
       numericInput("r_recomb", "r (between M and F)", value = 1e-7, min = 0, max = 0.5, step = 1e-7),
@@ -224,7 +264,7 @@ ui <- fluidPage(
         choices = haplotypes,
         selected = haplotypes
       ),
-      checkboxInput("show_mutation", "Show mutation-only trajectories (M, F)", value = TRUE)
+      checkboxInput("show_mutation", "Show mutation-only trajectories (M, F only)", value = TRUE)
     ),
     mainPanel(
       plotOutput("freq_plot", height = 420),
@@ -241,14 +281,18 @@ server <- function(input, output, session) {
       MF = input$p_MF,
       Mf = input$p_Mf,
       Mz = input$p_Mz,
+      MFp = input$p_MFp,
+      MFs = input$p_MFs,
       mF = input$p_mF,
       mf = input$p_mf,
-      mz = input$p_mz
+      mz = input$p_mz,
+      mFp = input$p_mFp,
+      mFs = input$p_mFs
     )
 
     result <- tryCatch({
       p <- validate_params(p, input$s_M, input$s_m, input$u_m, input$u_f,
-                           input$u_z, input$r_recomb, input$z_reduction,
+                           input$u_z, input$u_fp, input$u_fs, input$r_recomb, input$z_reduction,
                            input$max_generations, input$tol)
       cfg <- list(
         p = p,
@@ -257,6 +301,8 @@ server <- function(input, output, session) {
         u_m = input$u_m,
         u_f = input$u_f,
         u_z = input$u_z,
+        u_fp = input$u_fp,
+        u_fs = input$u_fs,
         r_recomb = input$r_recomb,
         z_reduction = input$z_reduction,
         max_generations = input$max_generations,
@@ -304,21 +350,25 @@ server <- function(input, output, session) {
         MF = input$p_MF,
         Mf = input$p_Mf,
         Mz = input$p_Mz,
+        MFp = input$p_MFp,
+        MFs = input$p_MFs,
         mF = input$p_mF,
         mf = input$p_mf,
-        mz = input$p_mz
+        mz = input$p_mz,
+        mFp = input$p_mFp,
+        mFs = input$p_mFs
       )
       p0 <- normalize_freqs(p0)
-      m0 <- sum(p0[c("MF", "Mf", "Mz")])
-      f0 <- sum(p0[c("MF", "mF")])
+      m0 <- sum(p0[c("MF", "Mf", "Mz", "MFp", "MFs")])
+      f0 <- sum(p0[c("MF", "mF", "MFs", "mFs")])
       gens <- df$gen
       m_mut <- m0 * (1 - input$u_m) ^ gens
-      f_mut <- f0 * (1 - input$u_f - input$u_z) ^ gens
+      f_mut <- f0 * (1 - input$u_f - input$u_fp) ^ gens
       mut_df <- data.frame(
         gen = c(gens, gens),
         freq = c(m_mut, f_mut),
         label = c(rep("M (mutation only)", length(gens)),
-                  rep("F (mutation only)", length(gens)))
+                  rep("F (mutation only; excludes Fp, z)", length(gens)))
       )
       p_plot <- p_plot +
         geom_line(
@@ -331,7 +381,8 @@ server <- function(input, output, session) {
         ) +
         scale_linetype_manual(
           name = "Mutation only",
-          values = c("M (mutation only)" = "dotted", "F (mutation only)" = "dotdash")
+          values = c("M (mutation only)" = "dotted",
+                     "F (mutation only; excludes Fp)" = "dotdash")
         )
     }
 
